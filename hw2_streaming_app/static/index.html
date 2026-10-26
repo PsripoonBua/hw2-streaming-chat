@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Streaming LLM Chat</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
+    textarea { width: 100%; min-height: 90px; padding: 10px; box-sizing: border-box; }
+    button { margin-top: 10px; padding: 10px 18px; cursor: pointer; }
+    #reply { white-space: pre-wrap; border: 1px solid #ddd; border-radius: 8px; padding: 14px; min-height: 100px; margin-top: 18px; }
+    #status { color: #555; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Streaming LLM Chat</h1>
+  <p>Enter a message. The reply will stream in as it is generated.</p>
+  <textarea id="message" placeholder="Type your message..."></textarea>
+  <br>
+  <button id="send">Send</button>
+  <div id="status"></div>
+  <div id="reply" aria-live="polite"></div>
+  <script>
+    const messageEl = document.getElementById("message");
+    const replyEl = document.getElementById("reply");
+    const statusEl = document.getElementById("status");
+    const sendBtn = document.getElementById("send");
+
+    sendBtn.addEventListener("click", async () => {
+      const message = messageEl.value.trim();
+      if (!message) {
+        statusEl.textContent = "Please enter a message.";
+        return;
+      }
+      replyEl.textContent = "";
+      statusEl.textContent = "Connecting...";
+      sendBtn.disabled = true;
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message, history: [], system_prompt: "You are a helpful assistant." })
+        });
+        if (!response.ok) {
+          statusEl.textContent = `Request failed (${response.status}).`;
+          return;
+        }
+        statusEl.textContent = "Generating...";
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finished = false;
+
+        while (!finished) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() || "";
+          for (const frame of frames) {
+            for (const line of frame.split(/\r?\n/)) {
+              if (!line.startsWith("data:")) continue;
+              let payload = line.slice(5);
+              if (payload.startsWith(" ")) payload = payload.slice(1);
+              if (payload === "[DONE]") {
+                finished = true;
+                break;
+              }
+              try {
+                const token = JSON.parse(payload);
+                replyEl.textContent += token;
+              } catch {
+                replyEl.textContent += payload;
+              }
+            }
+            if (finished) break;
+          }
+        }
+        statusEl.textContent = "Done.";
+      } catch (error) {
+        statusEl.textContent = "Could not connect to the server.";
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
